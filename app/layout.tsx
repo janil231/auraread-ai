@@ -30,7 +30,10 @@ export default function RootLayout({
       <body className="font-lexend antialiased">
         {/* Compliance banner — AuraRead is a document formatting utility, not a
             medical, clinical or diagnostic product. */}
-        <div className="border-b border-slate-800/80 bg-slate-900/60 px-4 py-2 text-center text-[11px] leading-snug text-slate-400 sm:text-xs">
+        <div
+          data-compliance-banner
+          className="border-b border-slate-800/80 bg-slate-900/60 px-4 py-2 text-center text-[11px] leading-snug text-slate-400 sm:text-xs"
+        >
           <span className="font-semibold text-slate-300">
             AuraRead AI is an assistive document formatting tool.
           </span>{" "}

@@ -20,6 +20,24 @@ body {
   background-attachment: fixed;
 }
 
+/* Reading stage (`data-stage="B"`): the page is one fixed-height column with its
+   own scroll area, so the document itself must not scroll - otherwise the
+   compliance banner rendered above the page in layout.tsx would add a page-level
+   scroll on top of the reader's. The banner is hidden here too, so the text gets
+   the full width and height under the sticky bar. The camera stage is unaffected.
+   Kept out of `@layer utilities` so Tailwind does not tree-shake it away: it is
+   an element selector, not a utility class. */
+html:has([data-stage="B"]),
+body:has([data-stage="B"]) {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body:has([data-stage="B"]) [data-compliance-banner] {
+  display: none;
+}
+
 @layer utilities {
   .scrollbar-soft {
     scrollbar-width: thin;

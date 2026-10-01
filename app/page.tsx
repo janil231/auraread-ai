@@ -14,15 +14,20 @@ import {
   Camera,
   CameraOff,
   Check,
+  ChevronDown,
   Copy,
+  Globe,
+  Image as ImageIcon,
   Languages,
   Loader2,
+  Menu,
   Minus,
   Palette,
   Plus,
   RefreshCw,
   Ruler,
   ScanLine,
+  Settings,
   Sparkles,
   TriangleAlert,
   Type,
@@ -80,7 +85,39 @@ const READING_TINTS: Record<
 
 const TINT_ORDER: TintId[] = ["default", "cream", "blue", "yellow"];
 
+/**
+ * ASD Zen Sensory Focus surface. One flat, low-saturation earth tone that
+ * replaces the page tint while the Autism profile is on - warm sand rather
+ * than pure grey, no gradient, no decorative border, no colour competing with
+ * the words.
+ *
+ * Only the background and text colour differ from a normal page. Font weight,
+ * size, tracking and line height are untouched, so switching the profile in
+ * mid-sentence cannot reflow the karaoke line.
+ */
+const ZEN_SURFACE_CLASS = "bg-[#E7E1D6]";
+const ZEN_INK_CLASS = "text-[#3F382E]";
+const ZEN_BORDER_CLASS = "border-[#D2C9B8]";
+
 type WorkspaceTab = "reader" | "mindmap";
+
+/**
+ * The reading profiles are one single-choice set: a page can be set up for
+ * Dyslexia, for Autism, or for neither, but never for both at once.
+ */
+type ReadingProfile = "dyslexia" | "autism" | "none";
+
+/** Radio-group order, which is also the arrow-key order inside the modal. */
+const PROFILE_ORDER: ReadingProfile[] = ["dyslexia", "autism", "none"];
+
+const PROFILE_KEYS = new Set([
+  "ArrowDown",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowLeft",
+  "Home",
+  "End",
+]);
 
 /** Which language the reader surface is showing. */
 type ReadingLang = "en" | "fil";
@@ -147,6 +184,120 @@ function renderPhonics(text: string, keyPrefix = "p", karaoke = false): React.Re
 const MIN_FONT_SIZE = 14;
 const MAX_FONT_SIZE = 34;
 const FONT_SIZE_STEP = 2;
+
+/* ------------------- literal language / idiom explainer ------------------- */
+
+/**
+ * Plain restatements of common English figures of speech, for the Literal
+ * Language profile.
+ *
+ * This is a fixed lookup table on purpose. Nothing here is generated, and no
+ * model is asked to interpret a page: each entry only restates what the printed
+ * words mean, in the same neutral way a dictionary defines an idiom. AuraRead
+ * stays a formatting utility - it does not assess the reader, explain the
+ * material, or offer guidance about it.
+ */
+const IDIOM_GLOSSARY: { term: string; plain: string }[] = [
+  { term: "break the ice", plain: "start a conversation that would otherwise be awkward" },
+  { term: "once in a blue moon", plain: "very rarely, almost never" },
+  { term: "under the weather", plain: "feeling slightly unwell" },
+  { term: "cost an arm and a leg", plain: "be very expensive" },
+  { term: "piece of cake", plain: "be very easy to do" },
+  { term: "hit the books", plain: "study hard" },
+  { term: "on the same page", plain: "agree with each other" },
+  { term: "in the same boat", plain: "be in the same difficult situation" },
+  { term: "better late than never", plain: "arriving late is still better than not arriving" },
+  { term: "see eye to eye", plain: "agree with each other completely" },
+  { term: "let the cat out of the bag", plain: "reveal a secret by accident" },
+  { term: "spill the beans", plain: "give away a secret" },
+  { term: "burn the midnight oil", plain: "work late into the night" },
+  { term: "pull yourself together", plain: "calm down and behave calmly" },
+  { term: "get the hang of it", plain: "learn how to do it after practising a little" },
+  { term: "read between the lines", plain: "notice the meaning that is implied but not written" },
+  { term: "call it a day", plain: "stop work for now" },
+  { term: "back to the drawing board", plain: "start the attempt again from the beginning" },
+  { term: "jump on the bandwagon", plain: "join something because others have joined it" },
+  { term: "go the extra mile", plain: "do more work than was asked" },
+];
+
+/**
+ * Builds one case-insensitive alternation over every glossary term, longest
+ * first so "in the same boat" is never shadowed by a shorter overlapping entry.
+ */
+const IDIOM_MATCH_PATTERN = new RegExp(
+  `\\b(${[...IDIOM_GLOSSARY]
+    .map((entry) => entry.term)
+    .sort((a, b) => b.length - a.length)
+    .join("|")})\\b`,
+  "gi",
+);
+
+/**
+ * Which figures of speech actually appear on this page. Matching is plain text
+ * search - no model call, no inference about the reader.
+ */
+function matchIdioms(text: string): { term: string; plain: string; count: number }[] {
+  const found: { term: string; plain: string; count: number }[] = [];
+
+  for (const entry of IDIOM_GLOSSARY) {
+    const pattern = new RegExp(
+      `\\b${entry.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "gi",
+    );
+    const count = text.match(pattern)?.length ?? 0;
+    if (count > 0) found.push({ ...entry, count });
+  }
+
+  return found;
+}
+
+/**
+ * Reader rendering for Literal Language mode: figures of speech get a flat
+ * highlight and a dotted underline, everything else is passed through with
+ * phonics applied exactly as the plain reader does it.
+ *
+ * The marking is background colour and `text-decoration` only. Neither changes
+ * a glyph's advance width, so this mode cannot reflow the line - the same rule
+ * the karaoke highlight follows.
+ */
+function renderLiteralText(
+  text: string,
+  phonicsOn: boolean,
+  keyPrefix = "l",
+): React.ReactNode[] {
+  const pattern = new RegExp(IDIOM_MATCH_PATTERN.source, "gi");
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const segment = text.slice(lastIndex, match.index);
+      nodes.push(
+        phonicsOn ? renderPhonics(segment, `${keyPrefix}-${key++}`) : segment,
+      );
+    }
+
+    nodes.push(
+      <span
+        key={`${keyPrefix}-${key++}`}
+        className="rounded-[2px] bg-sky-100/80 underline decoration-dotted decoration-2 underline-offset-4 decoration-sky-700"
+      >
+        {match[0]}
+      </span>,
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    const segment = text.slice(lastIndex);
+    nodes.push(phonicsOn ? renderPhonics(segment, `${keyPrefix}-${key++}`) : segment);
+  }
+
+  return nodes;
+}
 
 /* ------------------------------- karaoke ------------------------------- */
 
@@ -396,6 +547,307 @@ function ToolButton({
   );
 }
 
+/** Per-feature accent colours, so every profile toggle reads as its own control. */
+type ToggleAccent = "sky" | "amber" | "red" | "violet" | "emerald";
+
+const TOGGLE_ACCENT_CLASS: Record<
+  ToggleAccent,
+  { on: string; icon: string; track: string }
+> = {
+  sky: { on: "border-sky-400 bg-sky-400/15", icon: "text-sky-300", track: "bg-sky-500" },
+  amber: { on: "border-amber-400/60 bg-amber-400/10", icon: "text-amber-300", track: "bg-amber-500" },
+  red: { on: "border-red-400/50 bg-red-400/10", icon: "text-red-300", track: "bg-red-500" },
+  violet: {
+    on: "border-violet-400/60 bg-violet-400/10",
+    icon: "text-violet-300",
+    track: "bg-violet-500",
+  },
+  emerald: {
+    on: "border-emerald-400/60 bg-emerald-400/10",
+    icon: "text-emerald-300",
+    track: "bg-emerald-500",
+  },
+};
+
+type ToggleRowProps = {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  active: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+  accent?: ToggleAccent;
+};
+
+/**
+ * One feature switch, used by both the Accessibility Profiles drawer and the
+ * settings drawer so the same feature always looks and behaves the same wherever
+ * it is reached from.
+ *
+ * The switch pill is decorative (`aria-hidden`); the button itself carries
+ * `aria-pressed`, so the control's state is announced once, not twice.
+ */
+function ToggleRow({
+  icon,
+  title,
+  description,
+  active,
+  onChange,
+  disabled = false,
+  accent = "sky",
+}: ToggleRowProps) {
+  const palette = TOGGLE_ACCENT_CLASS[accent];
+
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      disabled={disabled}
+      aria-pressed={active}
+      className={[
+        "flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left",
+        "transition-all duration-300 motion-reduce:transition-none",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+        "disabled:cursor-not-allowed disabled:opacity-45",
+        active ? palette.on : "border-slate-700/70 bg-slate-800/50 hover:border-slate-600",
+      ].join(" ")}
+    >
+      <span className="flex min-w-0 items-center gap-3">
+        <span className={["shrink-0", active ? palette.icon : "text-slate-400"].join(" ")}>
+          {icon}
+        </span>
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-slate-100">{title}</span>
+          <span className="block text-[11px] leading-snug text-slate-400">{description}</span>
+        </span>
+      </span>
+      <span
+        aria-hidden="true"
+        className={[
+          "relative h-6 w-11 shrink-0 rounded-full transition-all duration-300 motion-reduce:transition-none",
+          active ? palette.track : "bg-slate-600",
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all duration-300 motion-reduce:transition-none",
+            active ? "left-[22px]" : "left-0.5",
+          ].join(" ")}
+        />
+      </span>
+    </button>
+  );
+}
+
+type ProfileTone = "sky" | "emerald";
+
+const PROFILE_TONE_CLASS: Record<
+  ProfileTone,
+  { card: string; chip: string; mark: string; icon: string }
+> = {
+  sky: {
+    card: "border-sky-400 bg-sky-500/10",
+    chip: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+    mark: "border-sky-400 bg-sky-400 text-slate-950",
+    icon: "bg-sky-500/15 text-sky-300",
+  },
+  emerald: {
+    card: "border-emerald-400 bg-emerald-500/10",
+    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+    mark: "border-emerald-400 bg-emerald-400 text-slate-950",
+    icon: "bg-emerald-500/15 text-emerald-300",
+  },
+};
+
+type ProfileCardProps = {
+  id: string;
+  index: number;
+  icon: React.ReactNode;
+  title: string;
+  summary: string;
+  /** Passive labels, not controls: selecting the card applies all of them. */
+  features: string[];
+  selected: boolean;
+  onSelect: () => void;
+  tone: ProfileTone;
+};
+
+/**
+ * One option of the reading-profile radio group.
+ *
+ * The card is a `role="radio"` button, so it carries `aria-checked` and is part
+ * of a single-choice set rather than an independent on/off switch. Selection is
+ * shown twice over - a ring around the card and a filled tick - because colour
+ * alone is not a reliable signal.
+ */
+function ProfileCard({
+  id,
+  index,
+  icon,
+  title,
+  summary,
+  features,
+  selected,
+  onSelect,
+  tone,
+}: ProfileCardProps) {
+  const palette = PROFILE_TONE_CLASS[tone];
+
+  return (
+    <button
+      id={id}
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      tabIndex={selected ? 0 : -1}
+      data-profile-index={index}
+      onClick={onSelect}
+      className={[
+        "flex w-full items-start gap-3 rounded-2xl border p-3.5 text-left",
+        "transition-all duration-300 motion-reduce:transition-none active:scale-[0.99]",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+        selected
+          ? `${palette.card} ring-2 ring-sky-400/70 ring-offset-2 ring-offset-slate-900`
+          : "border-slate-700 bg-slate-800/40 hover:border-slate-600",
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+          palette.icon,
+        ].join(" ")}
+      >
+        {icon}
+      </span>
+
+      {/* spans, not divs: the whole card is one button, so its contents must be
+          phrasing content. */}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-slate-100">{title}</span>
+          <span
+            aria-hidden="true"
+            className={[
+              "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+              "transition-all duration-300 motion-reduce:transition-none",
+              selected ? palette.mark : "border-slate-600 bg-transparent",
+            ].join(" ")}
+          >
+            {selected && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
+          </span>
+        </span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-slate-400">
+          {summary}
+        </span>
+        <span className="mt-2 flex flex-wrap gap-1.5">
+          {features.map((feature) => (
+            <span
+              key={feature}
+              className={[
+                "rounded-full border px-2 py-0.5 text-[10px]",
+                selected ? palette.chip : "border-slate-700 text-slate-500",
+              ].join(" ")}
+            >
+              {feature}
+            </span>
+          ))}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+type HeaderButtonProps = {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  expanded?: boolean;
+  controls: string;
+};
+
+/**
+ * Left / right button of the sticky reading header. The visible text label is
+ * hidden under 640px to keep the row on one line down to 360px, so an
+ * `sr-only` copy carries the accessible name instead of losing it.
+ */
+function HeaderButton({ onClick, icon, label, expanded, controls }: HeaderButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={expanded}
+      aria-controls={controls}
+      title={label}
+      className={[
+        "inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/70 px-2.5 py-2",
+        "text-xs font-medium text-slate-200 transition-all duration-300 motion-reduce:transition-none",
+        "hover:border-slate-500 hover:bg-slate-700/60 active:scale-95",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+      ].join(" ")}
+    >
+      {icon}
+      <span className="hidden sm:inline">{label}</span>
+      <span className="sr-only sm:hidden">{label}</span>
+    </button>
+  );
+}
+
+type NoticeBannerProps = {
+  notice: Notice;
+  onDismiss: () => void;
+};
+
+/**
+ * Shared status message. Rendered above the camera panel on stage A and at the
+ * top of the reader's own scroll area on stage B, so a scanner error is still
+ * the first thing you read whichever stage you are in.
+ */
+function NoticeBanner({ notice, onDismiss }: NoticeBannerProps) {
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      className={[
+        "mb-5 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm",
+        notice.tone === "error"
+          ? "border-rose-500/60 bg-rose-500/15 text-rose-50 shadow-lg shadow-rose-950/40"
+          : notice.tone === "warn"
+            ? "border-amber-500/50 bg-amber-500/12 text-amber-100"
+            : "border-slate-600 bg-slate-800/70 text-slate-200",
+      ].join(" ")}
+    >
+      <TriangleAlert
+        className={[
+          "mt-0.5 h-4 w-4 shrink-0",
+          notice.tone === "error" ? "text-rose-300" : "text-amber-300",
+        ].join(" ")}
+        aria-hidden="true"
+      />
+      <div className="min-w-0 flex-1">
+        {notice.tone === "error" && (
+          <p className="mb-0.5 text-xs font-bold uppercase tracking-wider text-rose-300">
+            Scanner error
+          </p>
+        )}
+        <p className="font-medium leading-snug">{notice.text}</p>
+        {notice.detail && (
+          <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-current/20 bg-black/30 px-2.5 py-2 font-mono text-[11px] leading-relaxed opacity-90">
+            {notice.detail}
+          </pre>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="rounded-md p-1 text-current/70 transition hover:bg-white/10"
+        aria-label="Dismiss message"
+      >
+        <X className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const [stage, setStage] = useState<Stage>("A");
   const [camState, setCamState] = useState<CamState>("idle");
@@ -427,6 +879,27 @@ export default function Home() {
   const [rulerOn, setRulerOn] = useState(false);
   const [rulerTop, setRulerTop] = useState<number | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>("reader");
+
+  /**
+   * Accessibility-profile features. Both are display-level: they restyle the
+   * reader surface or mark up the words already on the page. Neither replaces
+   * or resets any other state, so switching one mid-sentence only repaints.
+   */
+  const [asdZenFocus, setAsdZenFocus] = useState(false);
+  const [literalLanguage, setLiteralLanguage] = useState(false);
+
+  /**
+   * Sticky-header overlays. Both belong to the reading stage; opening one
+   * closes the other so they never stack on a short screen.
+   */
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * Full-screen view of the page photo. The thumbnail strip is gone in favour
+   * of a single compact button, so the lightbox is the only way to see the
+   * original at full size.
+   */
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [tagalog, setTagalog] = useState("");
   const [readingLang, setReadingLang] = useState<ReadingLang>("en");
@@ -457,6 +930,35 @@ export default function Home() {
    * a successful fetch.
    */
   const showingTagalog = readingLang === "fil";
+
+  /**
+   * The two profile cards are the only thing the Profiles modal offers, and the
+   * only thing it reports: each card shows whether its profile is applied, so
+   * there is no separate summary state to keep in sync.
+   */
+
+  /**
+   * Figures of speech found on the page, only computed while Literal Language
+   * is on. Pure text matching against a fixed glossary - no model call.
+   */
+  const matchedIdioms = useMemo(
+    () => (literalLanguage ? matchIdioms(displayText) : []),
+    [displayText, literalLanguage],
+  );
+
+  /**
+   * Reader surface styling. Zen Sensory Focus overrides the page tint with one
+   * flat neutral surface; everything else follows the chosen swatch.
+   */
+  const surfaceClass = asdZenFocus
+    ? ZEN_SURFACE_CLASS
+    : READING_TINTS[tint].surface;
+  const surfaceInkClass = asdZenFocus ? ZEN_INK_CLASS : READING_TINTS[tint].ink;
+  const surfaceBorderClass = asdZenFocus
+    ? ZEN_BORDER_CLASS
+    : dyslexiaFocus
+      ? "border-sky-300"
+      : READING_TINTS[tint].border;
 
   /**
    * What the mind map should summarise, and in what language. In Tagalog mode
@@ -524,6 +1026,12 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The profiles sheet, focused on open so Escape and Tab start inside it. */
+  const profilesPanelRef = useRef<HTMLDivElement | null>(null);
+  /** The photo lightbox, focused on open for the same reason. */
+  const photoPanelRef = useRef<HTMLDivElement | null>(null);
+  /** Whatever had focus before the sheet opened, to hand it back on close. */
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -554,6 +1062,118 @@ export default function Home() {
       );
     },
     [],
+  );
+
+  /**
+   * Closes whichever sticky-header overlay is open.
+   *
+   * `setRulerTop(null)` here is load-bearing: an open drawer shrinks the
+   * reading area, so a ruler position captured while it was open points at the
+   * wrong line once it closes. Dropping it costs nothing - the band reappears
+   * as soon as the pointer re-enters the text.
+   */
+  const closeOverlays = useCallback(() => {
+    setProfilesOpen(false);
+    setSettingsOpen(false);
+    setPhotoOpen(false);
+    setRulerTop(null);
+  }, []);
+
+  /** One overlay at a time: opening either closes the other. */
+  const toggleProfiles = useCallback(() => {
+    setSettingsOpen(false);
+    setPhotoOpen(false);
+    setProfilesOpen((v) => {
+      if (v) setRulerTop(null);
+      return !v;
+    });
+  }, []);
+
+  const toggleSettings = useCallback(() => {
+    setProfilesOpen(false);
+    setPhotoOpen(false);
+    setSettingsOpen((v) => {
+      if (v) setRulerTop(null);
+      return !v;
+    });
+  }, []);
+
+  /**
+   * Reading profiles are single-choice, not a set of independent switches: the
+   * Dyslexia and Autism profiles fight each other (one wants wide loose Lexend
+   * lines, the other a flat calm surface), so only one may be applied at a time.
+   *
+   * `none` is the escape hatch that clears the profile entirely. Every branch
+   * sets both flags, so the two can never drift out of sync, and each branch
+   * also takes its bundled extras (the ruler, Literal Language) with it.
+   *
+   * Only display state changes here. Scanned text, the translation and the mind
+   * map are never discarded, and read-aloud keeps running.
+   */
+  const selectProfile = useCallback((profile: ReadingProfile) => {
+    if (profile === "dyslexia") {
+      setDyslexiaFocus(true);
+      setAsdZenFocus(false);
+      setRulerOn(true);
+      setLiteralLanguage(false);
+      return;
+    }
+
+    if (profile === "autism") {
+      setDyslexiaFocus(false);
+      setAsdZenFocus(true);
+      // The line-tracking band belongs to the Dyslexia profile, and Zen keeps
+      // the page plain, so both give it up here.
+      setRulerOn(false);
+      setRulerTop(null);
+      setLiteralLanguage(true);
+      return;
+    }
+
+    setDyslexiaFocus(false);
+    setAsdZenFocus(false);
+    setRulerOn(false);
+    setRulerTop(null);
+    setLiteralLanguage(false);
+  }, []);
+
+  const selectedProfile: ReadingProfile = asdZenFocus
+    ? "autism"
+    : dyslexiaFocus
+      ? "dyslexia"
+      : "none";
+
+  /**
+   * Arrow keys move through a radio group, so the cards behave the way a
+   * screen-reader user expects from a single-choice set.
+   */
+  const handleProfileGroupKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!PROFILE_KEYS.has(event.key)) return;
+
+      const from = Number(
+        (event.target as HTMLElement).dataset.profileIndex ?? "0",
+      );
+      const last = PROFILE_ORDER.length - 1;
+
+      event.preventDefault();
+
+      let next = from;
+      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+        next = from >= last ? 0 : from + 1;
+      } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+        next = from <= 0 ? last : from - 1;
+      } else if (event.key === "Home") {
+        next = 0;
+      } else {
+        next = last;
+      }
+
+      const profile = PROFILE_ORDER[next];
+      selectProfile(profile);
+      document.getElementById(`profile-option-${profile}`)?.focus();
+    },
+    [selectProfile],
   );
 
   /* ------------------------------ boot camera ----------------------------- */
@@ -628,6 +1248,48 @@ export default function Home() {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
   }, [stopSpeaking, stopStream]);
+
+  /**
+   * Escape closes an open overlay. Both are dismissible by keyboard, so the
+   * sticky header is not a trap on a device with no back gesture.
+   */
+  useEffect(() => {
+    if (!profilesOpen && !settingsOpen && !photoOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeOverlays();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeOverlays, photoOpen, profilesOpen, settingsOpen]);
+
+  /**
+   * Move focus into a modal when it opens and hand it back to the button that
+   * opened it when it closes, so keyboard and screen-reader users are never
+   * left behind an overlay they cannot see the end of.
+   */
+  useEffect(() => {
+    const target = profilesOpen ? profilesPanelRef : photoOpen ? photoPanelRef : null;
+    const wasOpen = profilesOpen || photoOpen;
+
+    if (target) {
+      lastFocusedRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      target.current?.focus();
+      return;
+    }
+
+    if (!wasOpen) {
+      // First render: nothing was open, so there is nothing to give focus back.
+      return;
+    }
+
+    const restoreTo = lastFocusedRef.current;
+    lastFocusedRef.current = null;
+    if (restoreTo && document.contains(restoreTo)) restoreTo.focus();
+  }, [photoOpen, profilesOpen]);
 
   /* -------------------------------- OCR ----------------------------------- */
   // A real OCR call takes 1-18s on the free tier, so show a live elapsed
@@ -787,15 +1449,17 @@ export default function Home() {
   );
 
   const handleLoadSample = useCallback(async () => {
+    closeOverlays();
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     objectUrlRef.current = null;
     stopStream();
     setCamState("idle");
     await runOcr(SAMPLE_IMAGE_SRC, "Sample textbook page");
-  }, [runOcr, stopStream]);
+  }, [closeOverlays, runOcr, stopStream]);
 
   const handleRetake = useCallback(() => {
     stopSpeaking();
+    closeOverlays();
     setExtractedText("");
     setPreviewSrc(null);
     setSourceLabel(null);
@@ -810,7 +1474,7 @@ export default function Home() {
     setRulerOn(false);
     setRulerTop(null);
     setStage("A");
-  }, [stopSpeaking]);
+  }, [closeOverlays, stopSpeaking]);
 
   /* --------------------- translation & mind map ------------------------ */
 
@@ -1041,70 +1705,51 @@ export default function Home() {
     usedFallback && notice?.tone === "error";
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="border-b border-slate-800/80 bg-slate-950/70 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-4">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-violet-500 text-slate-950 shadow-lg shadow-sky-500/20">
-            <ScanLine className="h-6 w-6" aria-hidden="true" />
-          </div>
-          <div className="mr-auto">
-            <h1 className="text-lg font-semibold tracking-tight text-white sm:text-xl">
-              AuraRead AI
-            </h1>
-            <p className="text-xs text-slate-400 sm:text-sm">
-              Point your camera at a page &rarr; get clean, readable text.
-            </p>
-          </div>
-          <span className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-[11px] font-medium text-slate-300">
-            <Sparkles className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-            Assistive document formatting tool
-          </span>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:py-8">
-        {notice && (
-          <div
-            role="alert"
-            aria-live="assertive"
-            className={[
-              "mb-5 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm",
-              notice.tone === "error"
-                ? "border-rose-500/60 bg-rose-500/15 text-rose-50 shadow-lg shadow-rose-950/40"
-                : notice.tone === "warn"
-                  ? "border-amber-500/50 bg-amber-500/12 text-amber-100"
-                  : "border-slate-600 bg-slate-800/70 text-slate-200",
-            ].join(" ")}
-          >
-            <TriangleAlert
-              className={[
-                "mt-0.5 h-4 w-4 shrink-0",
-                notice.tone === "error" ? "text-rose-300" : "text-amber-300",
-              ].join(" ")}
-              aria-hidden="true"
-            />
-            <div className="min-w-0 flex-1">
-              {notice.tone === "error" && (
-                <p className="mb-0.5 text-xs font-bold uppercase tracking-wider text-rose-300">
-                  Scanner error
-                </p>
-              )}
-              <p className="font-medium leading-snug">{notice.text}</p>
-              {notice.detail && (
-                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-current/20 bg-black/30 px-2.5 py-2 font-mono text-[11px] leading-relaxed opacity-90">
-                  {notice.detail}
-                </pre>
-              )}
+    <div
+      data-stage={stage}
+      className={[
+        "flex flex-col",
+        // The reading stage owns the whole viewport: a fixed-height column with
+        // its own scroll area means the text is never pushed below the fold by
+        // a page-level scroll, and the controls are always within thumb reach.
+        // globals.css locks the document scroll while this is active, because
+        // the compliance banner in layout.tsx sits above this element.
+        stage === "B" ? "h-[100dvh] overflow-hidden" : "min-h-screen",
+      ].join(" ")}
+    >
+      {/* The brand bar carries the same hamburger as the reading header, so the
+          reading profile is one tap away before a page has even been scanned. */}
+      {stage === "A" && (
+        <header className="border-b border-slate-800/80 bg-slate-950/70 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-4">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-violet-500 text-slate-950 shadow-lg shadow-sky-500/20">
+              <ScanLine className="h-6 w-6" aria-hidden="true" />
             </div>
-            <button
-              type="button"
-              onClick={() => setNotice(null)}
-              className="rounded-md p-1 text-current/70 transition hover:bg-white/10"
-              aria-label="Dismiss message"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <div className="mr-auto">
+              <h1 className="text-lg font-semibold tracking-tight text-white sm:text-xl">
+                AuraRead AI
+              </h1>
+              <p className="text-xs text-slate-400 sm:text-sm">
+                Point your camera at a page &rarr; get clean, readable text.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-[11px] font-medium text-slate-300">
+              <Sparkles className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+              Assistive document formatting tool
+            </span>
           </div>
+        </header>
+      )}
+
+      <main
+        className={[
+          stage === "B"
+            ? "flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+            : "mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:py-8",
+        ].join(" ")}
+      >
+        {stage === "A" && notice && (
+          <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
         )}
 
         {stage === "A" ? (
@@ -1347,102 +1992,424 @@ export default function Home() {
             </section>
           </div>
         ) : (
-          <div className="animate-fade-in-up grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-            {/* --------------------- reading workspace --------------------- */}
-            <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 shadow-2xl shadow-slate-950/50">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-5 py-3">
-                <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-                  <BookOpen className="h-4 w-4 text-sky-400" aria-hidden="true" />
-                  Accessible reading workspace
-                </h2>
+          <div className="animate-fade-in-up flex min-h-0 flex-1 flex-col">
+            {/* ------------------ sticky reading header ------------------
+                Mobile-first: every control the workspace needs lives within
+                thumb reach at the top of the screen, so nothing has to be
+                scrolled to. The controls drawer is positioned absolutely under
+                this bar, so opening it overlays the text instead of resizing
+                the reader - no reflow, no jump, and read-aloud keeps running. */}
+            <header className="sticky top-0 z-40 w-full bg-slate-950/95 backdrop-blur-md border-b border-slate-800 px-3 py-2 flex items-center justify-between">
+              {/* LEFT: wordmark. The profile hamburger is a fixed element outside
+                  this bar, so it stays put across every stage; pl-12 clears it
+                  without disturbing the header's own layout. */}
+              <span className="flex min-w-0 items-center gap-1.5 pl-12 text-xs font-semibold text-slate-200">
+                <ScanLine className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
+                <span className="hidden sm:inline">AuraRead</span>
+              </span>
+              {/* CENTER: primary action, always visible */}
+              <button
+                type="button"
+                onClick={handleToggleSpeech}
+                disabled={isProcessing || displayText.trim().length === 0}
+                aria-pressed={isSpeaking}
+                className={[
+                  "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold",
+                  "transition-all duration-300 motion-reduce:transition-none active:scale-[0.98]",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                  isSpeaking
+                    ? "border border-amber-300 bg-amber-300 text-slate-950"
+                    : "bg-gradient-to-br from-sky-500 to-violet-500 text-slate-950 shadow-lg shadow-sky-500/20",
+                ].join(" ")}
+              >
+                {isSpeaking ? (
+                  <VolumeX className="h-4 w-4 shrink-0" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                )}
+                <span className="truncate">
+                  {isSpeaking ? "Stop reading" : "Read Aloud"}
+                </span>
+              </button>
 
-                {/* Language toggle + tab switcher sit together at the top of the workspace. */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleLangToggle}
-                    // Deliberately NOT disabled while translating: the switch
-                    // must stay clickable so it can be cancelled back to
-                    // English mid-fetch.
-                    disabled={isProcessing || !originalText}
-                    aria-pressed={showingTagalog}
-                    aria-busy={isTranslating}
+              {/* RIGHT: general reading controls */}
+              <HeaderButton
+                onClick={toggleSettings}
+                controls="reading-controls"
+                expanded={settingsOpen}
+                label="Controls"
+                icon={
+                  <span className="flex items-center">
+                    <Settings className="h-4 w-4" aria-hidden="true" />
+                    <ChevronDown
+                      className={[
+                        "h-3.5 w-3.5 transition-transform duration-300",
+                        "motion-reduce:transition-none",
+                        settingsOpen ? "rotate-180" : "",
+                      ].join(" ")}
+                      aria-hidden="true"
+                    />
+                  </span>
+                }
+              />
+
+              {/* ------------- collapsible reading controls -------------
+                  Positioned absolutely under the bar so it overlays the reader
+                  instead of pushing it: the text underneath never reflows, and
+                  read-aloud is not interrupted. Height is animated with the
+                  grid-rows 0fr -> 1fr trick, which transitions to the content's
+                  real height instead of guessing a max-height, and the panel
+                  stays mounted so a font-size drag never loses its own focus. */}
+              <div
+                id="reading-controls"
+                aria-hidden={!settingsOpen}
+                inert={!settingsOpen}
+                className={[
+                  "absolute inset-x-0 top-full z-50 grid",
+                  "transition-all duration-300 motion-reduce:transition-none",
+                  settingsOpen
+                    ? "grid-rows-[1fr] opacity-100"
+                    : "pointer-events-none grid-rows-[0fr] opacity-0",
+                ].join(" ")}
+              >
+                <div className="overflow-hidden">
+                  <div
                     className={[
-                      "inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-medium transition disabled:opacity-45",
-                      showingTagalog
-                        ? "border-sky-400/60 bg-sky-500/20 text-sky-100"
-                        : "border-slate-700 bg-slate-800/50 text-slate-200 hover:border-slate-600",
+                      "scrollbar-soft max-h-[72dvh] space-y-3.5 overflow-y-auto overscroll-contain",
+                      "border-b border-slate-800 bg-slate-950 px-3 py-3 shadow-2xl shadow-slate-950/60",
                     ].join(" ")}
                   >
-                    {isTranslating ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Languages
-                        className={[
-                          "h-3.5 w-3.5",
-                          showingTagalog ? "text-sky-300" : "text-slate-400",
-                        ].join(" ")}
-                        aria-hidden="true"
-                      />
-                    )}
-                    {showingTagalog ? "Show Original English" : "Translate to Tagalog"}
-                  </button>
+                    {/* page tint swatches */}
+                    <div>
+                      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        <Palette className="h-3.5 w-3.5" aria-hidden="true" />
+                        Page tint
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {TINT_ORDER.map((id) => {
+                          const swatch = READING_TINTS[id];
+                          const active = tint === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setTint(id)}
+                              disabled={isProcessing}
+                              aria-pressed={active}
+                              title={swatch.label}
+                              className={[
+                                "flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[11px] font-medium",
+                                "transition-all duration-300 motion-reduce:transition-none",
+                                "disabled:cursor-not-allowed disabled:opacity-45",
+                                active
+                                  ? "border-sky-400 bg-sky-500/15 text-sky-100"
+                                  : "border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-500",
+                              ].join(" ")}
+                            >
+                              <span
+                                className={[
+                                  "h-4 w-4 shrink-0 rounded-full border border-black/20",
+                                  swatch.swatch,
+                                ].join(" ")}
+                                aria-hidden="true"
+                              />
+                              <span className="truncate">{swatch.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {asdZenFocus && (
+                        <p className="mt-1.5 text-[11px] text-slate-500">
+                          Zen Sensory Focus is holding the page tint until you pick
+                          another profile in Profiles.
+                        </p>
+                      )}
+                    </div>
 
-                  <div
-                    role="tablist"
-                    aria-label="Workspace views"
-                    className="flex flex-wrap gap-1 rounded-xl border border-slate-700 bg-slate-800/50 p-1"
-                  >
-                    {(
-                      [
-                        { id: "reader", label: "Text Reader" },
-                        { id: "mindmap", label: "Visual Mind Map" },
-                      ] as const
-                    ).map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === item.id}
+                    {/* font size stepper */}
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <label
+                          htmlFor="font-size"
+                          className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400"
+                        >
+                          <Type className="h-3.5 w-3.5" aria-hidden="true" />
+                          Font size
+                        </label>
+                        <span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300">
+                          {fontSize}px
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFontSize((s) => Math.max(MIN_FONT_SIZE, s - FONT_SIZE_STEP))
+                          }
+                          disabled={isProcessing || fontSize <= MIN_FONT_SIZE}
+                          aria-label="Decrease font size"
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-800/60 text-slate-200 transition-all duration-300 hover:border-slate-500 hover:bg-slate-700/60 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Minus className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                        <input
+                          id="font-size"
+                          type="range"
+                          min={MIN_FONT_SIZE}
+                          max={MAX_FONT_SIZE}
+                          step={FONT_SIZE_STEP}
+                          value={fontSize}
+                          onChange={(e) => setFontSize(Number(e.target.value))}
+                          disabled={isProcessing}
+                          className="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-700 accent-sky-400 disabled:opacity-45"
+                          aria-valuetext={`${fontSize} pixels`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFontSize((s) =>
+                              Math.min(MAX_FONT_SIZE, s + FONT_SIZE_STEP),
+                            )
+                          }
+                          disabled={isProcessing || fontSize >= MAX_FONT_SIZE}
+                          aria-label="Increase font size"
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-800/60 text-slate-200 transition-all duration-300 hover:border-slate-500 hover:bg-slate-700/60 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Plus className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* reading aids: ruler and colour-coded phonics */}
+                    <div>
+                      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
+                        Reading aids
+                      </div>
+                      <div className="space-y-2">
+                        <ToggleRow
+                          icon={<Ruler className="h-4 w-4" aria-hidden="true" />}
+                          title="Reading Ruler"
+                          description="Dims every other line to stop line-skipping"
+                          active={rulerOn}
+                          accent="amber"
+                          disabled={isProcessing || tab !== "reader"}
+                          onChange={() =>
+                            setRulerOn((v) => {
+                              if (v) setRulerTop(null);
+                              return !v;
+                            })
+                          }
+                        />
+                        <ToggleRow
+                          icon={<Type className="h-4 w-4" aria-hidden="true" />}
+                          title="Color-Coded Phonics"
+                          description="Vowels and digraphs marked as sound anchors"
+                          active={phonicsOn}
+                          accent="red"
+                          disabled={isProcessing}
+                          onChange={() => setPhonicsOn((v) => !v)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* language */}
+                    <div>
+                      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+                        Language
+                      </div>
+                      <ToggleRow
+                        icon={
+                          isTranslating ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Languages className="h-4 w-4" aria-hidden="true" />
+                          )
+                        }
+                        title={
+                          showingTagalog ? "Show original English" : "Translate to Tagalog"
+                        }
+                        description={
+                          showingTagalog
+                            ? "Showing the Filipino version of this page"
+                            : "Natural everyday Filipino for the same words"
+                        }
+                        active={showingTagalog}
+                        accent="sky"
+                        // Deliberately not disabled while translating: the switch
+                        // has to stay live so it can be flipped back mid-fetch.
+                        disabled={isProcessing || !originalText}
+                        onChange={handleLangToggle}
+                      />
+                    </div>
+
+                    {/* page actions */}
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <ToolButton
+                        full
+                        icon={
+                          copied ? (
+                            <Check className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+                          ) : (
+                            <Copy className="h-4 w-4" aria-hidden="true" />
+                          )
+                        }
+                        label={copied ? "Copied" : "Copy text"}
+                        onClick={() => void handleCopy()}
+                        disabled={isProcessing || originalText.length === 0}
+                      />
+                      <ToolButton
+                        full
+                        icon={<BookOpen className="h-4 w-4" aria-hidden="true" />}
+                        label="Load Sample Page"
+                        onClick={() => void handleLoadSample()}
                         disabled={isProcessing}
-                        onClick={() => {
-                          setTab(item.id);
-                          // The band is measured against the previous view's
-                          // layout, so drop it until the pointer re-enters.
-                          setRulerTop(null);
-                          if (item.id === "mindmap" && mindmap) return;
-                          if (item.id === "mindmap") void handleBuildMindmap();
-                        }}
-                        className={[
-                          "rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-45",
-                          tab === item.id
-                            ? "bg-sky-500 text-white shadow"
-                            : "text-slate-300 hover:bg-slate-700/70",
-                        ].join(" ")}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                      />
+                      <ToolButton
+                        full
+                        tone="danger"
+                        icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
+                        label="Retake photo"
+                        onClick={handleRetake}
+                        disabled={isProcessing}
+                      />
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                  {sourceLabel && (
-                    <span className="rounded-full border border-slate-700 bg-slate-800/70 px-2.5 py-1 text-slate-300">
-                      {sourceLabel}
-                    </span>
-                  )}
-                  {originalText && (
-                    <span className="rounded-full border border-slate-700 bg-slate-800/70 px-2.5 py-1 text-slate-400">
-                      {wordCount.toLocaleString()} words
-                    </span>
-                  )}
+              </div>
+            </header>
+
+
+            {/* ------------------------- original photo lightbox -------------------------
+                  Replaces the old pinned thumbnail: the photo is one tap away
+                  and costs the reader no permanent height. */}
+              {photoOpen && previewSrc && (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in-up"
+                  onClick={(event) => {
+                    if (event.target === event.currentTarget) setPhotoOpen(false);
+                  }}
+                >
+                  <div
+                    ref={photoPanelRef}
+                    tabIndex={-1}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="The original page you scanned"
+                    className="flex max-h-full w-full max-w-3xl flex-col gap-2 outline-none"
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="mr-auto truncate text-xs font-medium text-slate-200">
+                        {sourceLabel ?? "The page you scanned"}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setPhotoOpen(false)}
+                        aria-label="Close original photo"
+                        className="rounded-lg p-1.5 text-slate-300 transition hover:bg-white/10 hover:text-white"
+                      >
+                        <X className="h-5 w-5" aria-hidden="true" />
+                      </button>
+                    </div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewSrc}
+                      alt="The page that was scanned"
+                      className="min-h-0 w-full rounded-xl border border-slate-700 bg-slate-950 object-contain"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* --------------------- reading workspace --------------------- */}
+            <section
+              aria-label="Reading workspace"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              {/* One compact strip: what is loaded, the photo on demand, and the
+                  two workspace views. Every adjustment lives in the Controls
+                  drawer, so nothing else competes for the reader's height. */}
+              <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-1.5">
+                <h2 className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                  <BookOpen className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                  Reading workspace
+                </h2>
+
+                {/* The photo is no longer pinned above the text. One button opens
+                    it full-screen instead, so the reader keeps the whole screen. */}
+                {previewSrc && (
+                  <button
+                    type="button"
+                    onClick={() => setPhotoOpen(true)}
+                    className={[
+                      "inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/70",
+                      "px-2 py-1 text-[11px] font-medium text-slate-300",
+                      "transition-all duration-300 motion-reduce:transition-none hover:border-slate-500 hover:text-slate-100",
+                    ].join(" ")}
+                  >
+                    <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                    View Original Photo
+                  </button>
+                )}
+
+                {/* Metadata is reference-only, so it is the first thing to go
+                    when the row runs out of room on a phone. */}
+                {sourceLabel && (
+                  <span className="hidden rounded-full border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-300 sm:inline-block">
+                    {sourceLabel}
+                  </span>
+                )}
+                {originalText && (
+                  <span className="hidden rounded-full border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-400 sm:inline-block">
+                    {wordCount.toLocaleString()} words
+                  </span>
+                )}
+
+                <div
+                  role="tablist"
+                  aria-label="Workspace views"
+                  className="ml-auto flex flex-wrap gap-1 rounded-xl border border-slate-700 bg-slate-800/50 p-1"
+                >
+                  {(
+                    [
+                      { id: "reader", label: "Text Reader" },
+                      { id: "mindmap", label: "Visual Mind Map" },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === item.id}
+                      disabled={isProcessing}
+                      onClick={() => {
+                        setTab(item.id);
+                        // The band is measured against the previous view's
+                        // layout, so drop it until the pointer re-enters.
+                        setRulerTop(null);
+                        if (item.id === "mindmap" && mindmap) return;
+                        if (item.id === "mindmap") void handleBuildMindmap();
+                      }}
+                      className={[
+                        "rounded-lg px-2.5 py-1 text-[11px] font-medium",
+                        "transition-all duration-300 motion-reduce:transition-none disabled:opacity-45",
+                        tab === item.id
+                          ? "bg-sky-500 text-white shadow"
+                          : "text-slate-300 hover:bg-slate-700/70",
+                      ].join(" ")}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {usedFallback && (
                 <p
                   className={[
-                    "border-b px-5 py-2 text-xs",
+                    "shrink-0 border-b px-3 py-2 text-xs sm:px-5",
                     usedFallbackHardFailure
                       ? "border-rose-500/40 bg-rose-500/12 text-rose-200"
                       : "border-amber-500/30 bg-amber-500/10 text-amber-200",
@@ -1454,57 +2421,22 @@ export default function Home() {
                 </p>
               )}
 
-              {previewSrc && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={previewSrc}
-                  alt="The page that was scanned"
-                  className="max-h-64 w-full border-b border-slate-800 bg-slate-950 object-contain"
-                />
-              )}
-
-              {/* background tint toolbar */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800/70 px-5 py-2.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                  Page tint
-                </span>
-                {TINT_ORDER.map((id) => {
-                  const swatch = READING_TINTS[id];
-                  const active = tint === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setTint(id)}
-                      aria-pressed={active}
-                      title={swatch.label}
-                      className={[
-                        "flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-medium transition",
-                        active
-                          ? "border-sky-400 bg-sky-500/15 text-sky-200"
-                          : "border-slate-700 text-slate-400 hover:border-slate-500",
-                      ].join(" ")}
-                    >
-                      <span
-                        className={[
-                          "h-4 w-4 rounded-full border border-black/20",
-                          swatch.swatch,
-                        ].join(" ")}
-                        aria-hidden="true"
-                      />
-                      {swatch.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="p-4 sm:p-6">
+              {/* Reader scroll area. This is the only scrolling region on the
+                  reading stage: the page itself cannot scroll, so the sticky
+                  header stays pinned and the document keeps the full height
+                  below it. */}
+              <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-5 sm:py-4">
+                {notice && (
+                  <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
+                )}
                 <div
                   ref={readerSurfaceRef}
                   className={[
-                    "relative rounded-2xl border p-5 shadow-inner sm:p-8",
-                    READING_TINTS[tint].surface,
-                    dyslexiaFocus ? "border-sky-300" : READING_TINTS[tint].border,
+                    "relative rounded-2xl border p-4 sm:p-8",
+                    // Zen mode drops the inner shadow too - no decorative depth.
+                    asdZenFocus ? "" : "shadow-inner",
+                    surfaceClass,
+                    surfaceBorderClass,
                   ].join(" ")}
                 >
                   {isProcessing ? (
@@ -1630,7 +2562,7 @@ export default function Home() {
                     <div
                       className={[
                         "relative max-none whitespace-pre-wrap break-words outline-none transition-colors duration-200 motion-reduce:transition-none",
-                        READING_TINTS[tint].ink,
+                        surfaceInkClass,
                         dyslexiaFocus
                           ? "font-lexend tracking-wide leading-loose"
                           : "font-lexend tracking-normal leading-relaxed",
@@ -1657,6 +2589,9 @@ export default function Home() {
                           Translating to Tagalog…
                         </span>
                       ) : karaokeActive ? (
+                        /* Karaoke wins over every markup mode while speaking:
+                           the token stream must stay exactly as it was, or the
+                           highlight starts moving words around. */
                         renderKaraokeText(
                           displayText,
                           karaokeTokens,
@@ -1665,6 +2600,8 @@ export default function Home() {
                           "k",
                           activeTokenElRef,
                         )
+                      ) : literalLanguage ? (
+                        renderLiteralText(displayText, phonicsOn)
                       ) : phonicsOn ? (
                         renderPhonics(displayText)
                       ) : (
@@ -1678,8 +2615,17 @@ export default function Home() {
                     tracks the cursor in the English reader and in Tagalog Notes
                     alike. Dimming sits above the text (pointer-events-none) so
                     the text underneath stays selectable.
+
+                    Hidden while an overlay is open: a drawer shrinks the reading
+                    area, and the captured position would then point at the wrong
+                    line. `closeOverlays` clears the position, so the band
+                    returns on the next pointer move.
                   */}
-                  {rulerOn && rulerTop !== null && isReadingSurface && (
+                  {rulerOn &&
+                    rulerTop !== null &&
+                    isReadingSurface &&
+                    !profilesOpen &&
+                    !settingsOpen && (
                     <div className="pointer-events-none absolute inset-0" aria-hidden="true">
                       <div
                         className={[
@@ -1713,351 +2659,218 @@ export default function Home() {
                   </p>
                 )}
 
+                {/* Literal Language: the plain restatements of any figure of
+                    speech found on the page. Fixed glossary, no model call, no
+                    interpretation of the material itself. */}
+                {literalLanguage && (
+                  <section
+                    aria-label="Plain restatements of figures of speech"
+                    className="mt-3 rounded-xl border border-slate-300 bg-white/60 p-3.5"
+                  >
+                    <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                      <Type className="h-3.5 w-3.5" aria-hidden="true" />
+                      Figures of speech on this page
+                    </h3>
+                    {matchedIdioms.length === 0 ? (
+                      <p className="text-[11px] leading-relaxed text-slate-600">
+                        None of the common figures of speech were found in this
+                        text. Everything above is written straight.
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {matchedIdioms.map((entry) => (
+                          <li
+                            key={entry.term}
+                            className="text-xs leading-relaxed text-slate-700"
+                          >
+                            <span className="font-semibold text-slate-900">
+                              “{entry.term}”
+                            </span>
+                            {entry.count > 1 && (
+                              <span className="text-slate-500">
+                                {" "}
+                                ({entry.count}×)
+                              </span>
+                            )}
+                            <span className="text-slate-500"> → </span>
+                            <span>{entry.plain}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="mt-2.5 text-[10px] leading-relaxed text-slate-500">
+                      Each entry restates what the printed figure of speech means.
+                      Nothing here interprets the page or the material itself.
+                    </p>
+                  </section>
+                )}
+
                 <p className="mt-3 text-[11px] text-slate-500">
                   Tip: focus the text box and use your browser&apos;s own zoom
                   (Ctrl + / Ctrl -) for fine adjustments.
                 </p>
-              </div>
-            </section>
 
-            {/* ---------------------------- toolbar ------------------------- */}
-            <aside className="flex flex-col gap-4">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <h2 className="text-sm font-semibold text-slate-200">
-                  Reading controls
-                </h2>
-
-                <div className="mt-4 space-y-5">
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => setDyslexiaFocus((v) => !v)}
-                      disabled={isProcessing}
-                      aria-pressed={dyslexiaFocus}
-                      className={[
-                        "flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition disabled:opacity-45",
-                        dyslexiaFocus
-                          ? "border-sky-400 bg-sky-400/15"
-                          : "border-slate-700 bg-slate-800/60 hover:border-slate-500",
-                      ].join(" ")}
-                    >
-                      <span className="flex items-center gap-3">
-                        <Type
-                          className={[
-                            "h-5 w-5",
-                            dyslexiaFocus ? "text-sky-300" : "text-slate-400",
-                          ].join(" ")}
-                          aria-hidden="true"
-                        />
-                        <span>
-                          <span className="block text-sm font-medium text-slate-100">
-                            Dyslexia Focus
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            Wider spacing &amp; line height
-                          </span>
-                        </span>
-                      </span>
-                      <span
-                        className={[
-                          "relative h-6 w-11 shrink-0 rounded-full transition",
-                          dyslexiaFocus ? "bg-sky-500" : "bg-slate-600",
-                        ].join(" ")}
-                      >
-                        <span
-                          className={[
-                            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
-                            dyslexiaFocus ? "left-[22px]" : "left-0.5",
-                          ].join(" ")}
-                        />
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* ------------------- reading ruler toggle ------------------- */}
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRulerOn((v) => {
-                          if (v) setRulerTop(null);
-                          return !v;
-                        });
-                      }}
-                      disabled={isProcessing}
-                      aria-pressed={rulerOn}
-                      className={[
-                        "flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition disabled:opacity-45",
-                        rulerOn
-                          ? "border-amber-400/60 bg-amber-400/10"
-                          : "border-slate-700/70 hover:border-slate-600",
-                      ].join(" ")}
-                    >
-                      <span className="flex items-center gap-3">
-                        <Ruler
-                          className={[
-                            "h-4 w-4",
-                            rulerOn ? "text-amber-300" : "text-slate-400",
-                          ].join(" ")}
-                          aria-hidden="true"
-                        />
-                        <span>
-                          <span className="block text-sm font-medium text-slate-100">
-                            Reading Ruler
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            Dim other lines to stop line-skipping
-                          </span>
-                        </span>
-                      </span>
-                      <span
-                        className={[
-                          "relative h-6 w-11 shrink-0 rounded-full transition",
-                          rulerOn ? "bg-amber-500" : "bg-slate-600",
-                        ].join(" ")}
-                      >
-                        <span
-                          className={[
-                            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
-                            rulerOn ? "left-[22px]" : "left-0.5",
-                          ].join(" ")}
-                        />
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* ----------------- color-coded phonics toggle ---------------- */}
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => setPhonicsOn((v) => !v)}
-                      disabled={isProcessing}
-                      aria-pressed={phonicsOn}
-                      className={[
-                        "flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition disabled:opacity-45",
-                        phonicsOn
-                          ? "border-red-400/50 bg-red-400/10"
-                          : "border-slate-700/70 hover:border-slate-600",
-                      ].join(" ")}
-                    >
-                      <span className="flex items-center gap-3">
-                        <Type
-                          className={[
-                            "h-4 w-4",
-                            phonicsOn ? "text-red-300" : "text-slate-400",
-                          ].join(" ")}
-                          aria-hidden="true"
-                        />
-                        <span>
-                          <span className="block text-sm font-medium text-slate-100">
-                            Color-Coded Phonics
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            <span className="font-semibold text-red-400">vowels</span>
-                            {" and "}
-                            <span className="font-semibold text-emerald-400">
-                              digraphs
-                            </span>{" "}
-                            highlighted
-                          </span>
-                        </span>
-                      </span>
-                      <span
-                        className={[
-                          "relative h-6 w-11 shrink-0 rounded-full transition",
-                          phonicsOn ? "bg-red-500" : "bg-slate-600",
-                        ].join(" ")}
-                      >
-                        <span
-                          className={[
-                            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
-                            phonicsOn ? "left-[22px]" : "left-0.5",
-                          ].join(" ")}
-                        />
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* ------------------- English / Tagalog toggle ----------------- */}
-                  <div>
-                    <button
-                      type="button"
-                      onClick={handleLangToggle}
-                      // Stay clickable while translating so the user can
-                      // switch back to English without waiting for the fetch.
-                      disabled={isProcessing || !originalText}
-                      aria-pressed={showingTagalog}
-                      aria-busy={isTranslating}
-                      className={[
-                        "flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition disabled:opacity-45",
-                        showingTagalog
-                          ? "border-sky-400/60 bg-sky-500/12"
-                          : "border-slate-700/70 hover:border-slate-600",
-                      ].join(" ")}
-                    >
-                      <span className="flex items-center gap-3">
-                        {isTranslating ? (
-                          <Loader2
-                            className="h-4 w-4 animate-spin text-sky-400"
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <Languages
-                            className={[
-                              "h-4 w-4",
-                              showingTagalog ? "text-sky-300" : "text-sky-400",
-                            ].join(" ")}
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span>
-                          <span className="block text-sm font-medium text-slate-100">
-                            {showingTagalog ? "Show Original English" : "Translate to Tagalog"}
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            Natural everyday Filipino
-                          </span>
-                        </span>
-                      </span>
-                      <span
-                        className={[
-                          "relative h-6 w-11 shrink-0 rounded-full transition",
-                          showingTagalog ? "bg-sky-500" : "bg-slate-600",
-                        ].join(" ")}
-                        aria-hidden="true"
-                      >
-                        <span
-                          className={[
-                            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
-                            showingTagalog ? "left-[22px]" : "left-0.5",
-                          ].join(" ")}
-                        />
-                      </span>
-                    </button>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label
-                        htmlFor="font-size"
-                        className="text-xs font-medium uppercase tracking-wider text-slate-400"
-                      >
-                        Font size
-                      </label>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300">
-                        {fontSize}px
-                      </span>
-                    </div>
-                    <div className="mt-3 flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFontSize((s) => Math.max(MIN_FONT_SIZE, s - FONT_SIZE_STEP))
-                        }
-                        disabled={isProcessing || fontSize <= MIN_FONT_SIZE}
-                        aria-label="Decrease font size"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-800/60 text-slate-200 transition hover:border-slate-500 hover:bg-slate-700/60 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <Minus className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                      <input
-                        id="font-size"
-                        type="range"
-                        min={MIN_FONT_SIZE}
-                        max={MAX_FONT_SIZE}
-                        step={FONT_SIZE_STEP}
-                        value={fontSize}
-                        onChange={(e) => setFontSize(Number(e.target.value))}
-                        disabled={isProcessing}
-                        className="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-700 accent-sky-400 disabled:opacity-45"
-                        aria-valuetext={`${fontSize} pixels`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFontSize((s) =>
-                            Math.min(MAX_FONT_SIZE, s + FONT_SIZE_STEP),
-                          )
-                        }
-                        disabled={isProcessing || fontSize >= MAX_FONT_SIZE}
-                        aria-label="Increase font size"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-800/60 text-slate-200 transition hover:border-slate-500 hover:bg-slate-700/60 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <Plus className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    </div>
-                    <p className="mt-3 rounded-lg bg-slate-800/50 px-3 py-2 text-xs leading-relaxed text-slate-400">
-                      Preview:{" "}
-                      <span
-                        className={[
-                          "text-slate-200",
-                          dyslexiaFocus ? "tracking-wide leading-loose" : "",
-                        ].join(" ")}
-                        style={{ fontSize: `${Math.min(fontSize, 20)}px` }}
-                      >
-                        Every letter on its own line
-                      </span>
-                    </p>
-                  </div>
-
-                  <div className="space-y-2.5">
-                    <ToolButton
-                      full
-                      icon={
-                        isSpeaking ? (
-                          <VolumeX className="h-4 w-4" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="h-4 w-4" aria-hidden="true" />
-                        )
-                      }
-                      label={isSpeaking ? "Stop reading" : "Read aloud"}
-                      onClick={handleToggleSpeech}
-                      disabled={isProcessing || displayText.trim().length === 0}
-                      active={isSpeaking}
-                    />
-                    <ToolButton
-                      full
-                      icon={
-                        copied ? (
-                          <Check className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-                        ) : (
-                          <Copy className="h-4 w-4" aria-hidden="true" />
-                        )
-                      }
-                      label={copied ? "Copied" : "Copy text"}
-                      onClick={() => void handleCopy()}
-                      disabled={isProcessing || originalText.length === 0}
-                    />
-                    <ToolButton
-                      full
-                      tone="danger"
-                      icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
-                      label="Retake photo"
-                      onClick={handleRetake}
-                      disabled={isProcessing}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-4 text-[11px] leading-relaxed text-slate-500">
-                <p className="font-semibold text-slate-400">
-                  AuraRead AI is an assistive document formatting tool.
-                </p>
-                <p className="mt-1">
-                  Text is reproduced verbatim from your photo. No diagnosis,
+                <p className="mt-3 border-t border-slate-200/70 pt-3 text-[11px] leading-relaxed text-slate-500">
+                  AuraRead AI is an assistive document formatting tool. Text is
+                  reproduced verbatim from your photo — no diagnosis,
                   interpretation or health guidance is provided.
                 </p>
               </div>
-            </aside>
+            </section>
           </div>
         )}
+
       </main>
 
-      <footer className="border-t border-slate-800/80 px-4 py-5 text-center text-[11px] leading-relaxed text-slate-500">
-        AuraRead AI — assistive document formatting tool. Not a medical device.
-        Images are processed in memory for this demo and are not stored.
-      </footer>
+      {/* --------------- accessibility profiles modal ---------------
+          Rendered after </main> so the same modal serves the camera stage and
+          the reading stage. The two profiles are one single-choice set, so the
+          cards are radios: picking one applies it and takes the other back off. */}
+      {profilesOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in-up"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeOverlays();
+          }}
+        >
+          <div
+            id="accessibility-profiles"
+            ref={profilesPanelRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profiles-heading"
+            className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl outline-none"
+          >
+            <div className="mb-3 flex items-center gap-3">
+              <h2
+                id="profiles-heading"
+                className="mr-auto text-sm font-semibold text-slate-100"
+              >
+                Choose a reading profile
+              </h2>
+              <button
+                type="button"
+                onClick={closeOverlays}
+                aria-label="Close accessibility profiles"
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <p className="mb-2.5 text-[11px] leading-snug text-slate-400">
+              Pick the one that matches how you read. Only one profile is applied
+              at a time, and you can clear it whenever you like.
+            </p>
+
+            <div
+              role="radiogroup"
+              aria-labelledby="profiles-heading"
+              className="grid gap-2.5"
+              onKeyDown={handleProfileGroupKeyDown}
+            >
+              <ProfileCard
+                id="profile-option-dyslexia"
+                index={0}
+                icon={<Type className="h-5 w-5" aria-hidden="true" />}
+                title="Dyslexia"
+                summary="Roomier type and a line-tracking guide so the eye stays on the line it is reading."
+                features={["Lexend typeface", "Wide spacing", "Reading ruler"]}
+                selected={selectedProfile === "dyslexia"}
+                onSelect={() => selectProfile("dyslexia")}
+                tone="sky"
+              />
+              <ProfileCard
+                id="profile-option-autism"
+                index={1}
+                icon={<Brain className="h-5 w-5" aria-hidden="true" />}
+                title="Autism"
+                summary="A calm, low-stimulation page with figures of speech restated in plain words."
+                features={["Zen sensory focus", "Earth tones", "Literal language"]}
+                selected={selectedProfile === "autism"}
+                onSelect={() => selectProfile("autism")}
+                tone="emerald"
+              />
+
+              {/* The clear option: same radio group, so it is reached with the
+                  arrow keys like any other choice. */}
+              <button
+                id="profile-option-none"
+                type="button"
+                role="radio"
+                aria-checked={selectedProfile === "none"}
+                tabIndex={selectedProfile === "none" ? 0 : -1}
+                data-profile-index={2}
+                onClick={() => selectProfile("none")}
+                className={[
+                  "flex w-full items-center gap-2.5 rounded-2xl border px-3.5 py-2.5 text-left",
+                  "transition-all duration-300 motion-reduce:transition-none active:scale-[0.99]",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+                  selectedProfile === "none"
+                    ? "border-slate-400 bg-slate-700/60 ring-2 ring-slate-300/70 ring-offset-2 ring-offset-slate-900"
+                    : "border-slate-700 bg-slate-800/40 hover:border-slate-600",
+                ].join(" ")}
+              >
+                <span className="text-xs font-medium text-slate-300">
+                  Default — no profile
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={[
+                    "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                    "transition-all duration-300 motion-reduce:transition-none",
+                    selectedProfile === "none"
+                      ? "border-slate-300 bg-slate-300 text-slate-900"
+                      : "border-slate-600 bg-transparent",
+                  ].join(" ")}
+                >
+                  {selectedProfile === "none" && (
+                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                  )}
+                </span>
+              </button>
+            </div>
+
+            <p className="mt-3 text-[10px] leading-relaxed text-slate-500">
+              Profiles only change how the page is displayed. AuraRead AI is an
+              assistive document formatting tool and does not assess, diagnose
+              or advise.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {stage === "A" && (
+        <footer className="border-t border-slate-800/80 px-4 py-5 text-center text-[11px] leading-relaxed text-slate-500">
+          AuraRead AI — assistive document formatting tool. Not a medical device.
+          Images are processed in memory for this demo and are not stored.
+        </footer>
+      )}
+
+      {/* --------------- permanent profiles hamburger ---------------
+          Fixed outside the stage markup so it is on screen in the camera
+          stage and the reading stage alike, and never scrolls or remounts.
+          z-[60] keeps it above the sticky header (z-40) and both overlay
+          layers (z-50), so it also closes the modal it opened. */}
+      <button
+        type="button"
+        onClick={toggleProfiles}
+        aria-expanded={profilesOpen}
+        aria-controls="accessibility-profiles"
+        aria-label="Reading profiles"
+        className={[
+          "fixed left-3 top-3 z-[60] inline-flex h-9 w-9 items-center justify-center rounded-xl",
+          "border bg-slate-900/90 shadow-lg shadow-slate-950/50 backdrop-blur",
+          "transition-all duration-300 motion-reduce:transition-none active:scale-95",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
+          profilesOpen
+            ? "border-sky-400 text-sky-300"
+            : "border-slate-700 text-slate-200 hover:border-slate-500 hover:text-white",
+        ].join(" ")}
+      >
+        <Menu className="h-4 w-4" aria-hidden="true" />
+      </button>
     </div>
   );
 }
