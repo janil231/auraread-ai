@@ -10,9 +10,10 @@ workspaces built for students with **Dyslexia**, **Autism (ASD)**, and
 **Live demo:** https://auraread-ai.vercel.app
 **Source:** https://github.com/janil231/auraread-ai
 
-> The app UI is currently branded **AuraRead AI** (the repository's original
-> working name). BIGKAS is the project name; the in-app string is not yet
-> renamed.
+> The product, its UI and this document are all branded **BIGKAS**. The GitHub
+> repository, the Vercel project and the `auraread-ai.vercel.app` URL still use
+> the project's original working name, **AuraRead AI** — those were assigned
+> before the name change and were left as-is to keep the live demo URL stable.
 
 ---
 

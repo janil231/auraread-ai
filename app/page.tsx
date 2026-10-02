@@ -193,7 +193,7 @@ const FONT_SIZE_STEP = 2;
  *
  * This is a fixed lookup table on purpose. Nothing here is generated, and no
  * model is asked to interpret a page: each entry only restates what the printed
- * words mean, in the same neutral way a dictionary defines an idiom. AuraRead
+ * words mean, in the same neutral way a dictionary defines an idiom. BIGKAS
  * stays a formatting utility - it does not assess the reader, explain the
  * material, or offer guidance about it.
  */
@@ -474,6 +474,45 @@ async function toBase64DataUrl(source: Blob | string): Promise<string> {
 
 type Stage = "A" | "B";
 type CamState = "idle" | "starting" | "ready" | "denied" | "unavailable";
+
+/**
+ * Which working screen the student is on: the camera, or the reader.
+ *
+ * This does NOT include the visual schedule. The schedule is not a place the
+ * student navigates to - it is what the Autism profile replaces the landing
+ * screen with - so it is derived from the chosen profile rather than stored
+ * here. Keeping it out of this union stops the two from disagreeing.
+ */
+type AppState = "camera" | "workspace";
+
+/* ------------------------- visual schedule (TEACCH) ------------------------- */
+
+/**
+ * A schedule item's position in the day, as a TEACCH work system presents it:
+ * finished, happening right now, or still to come.
+ */
+type ScheduleStatus = "done" | "active" | "pending";
+
+/**
+ * Mock timetable. `status` is written out rather than derived from the clock,
+ * so the demo always has one clearly marked "now" item to start from. A real
+ * deployment would derive this from the student's actual timetable instead.
+ */
+const VISUAL_SCHEDULE: {
+  time: string;
+  label: string;
+  status: ScheduleStatus;
+}[] = [
+  { time: "8:00 AM", label: "Reading", status: "done" },
+  { time: "9:00 AM", label: "Math", status: "done" },
+  { time: "10:00 AM", label: "Science", status: "active" },
+  { time: "11:00 AM", label: "Art", status: "pending" },
+  { time: "12:00 PM", label: "Lunch", status: "pending" },
+  { time: "1:00 PM", label: "Recess", status: "pending" },
+  { time: "2:00 PM", label: "Writing", status: "pending" },
+];
+
+const SCHOOL_END_TIME = "3:00 PM";
 
 type OcrResult = {
   ok: boolean;
@@ -792,6 +831,147 @@ function HeaderButton({ onClick, icon, label, expanded, controls }: HeaderButton
   );
 }
 
+type VisualScheduleProps = {
+  onStartTask: () => void;
+};
+
+/**
+ * The Autism profile's screen, laid out the way a TEACCH visual schedule
+ * presents a day: a fixed, visible list of what comes next, with one item
+ * clearly marked as happening now.
+ *
+ * This is shown *because* the Autism profile is selected, not because the
+ * student navigated here - see `showSchedule` in `Home`. Starting a task
+ * returns to the camera and deliberately leaves the profile alone, so Zen
+ * Sensory Focus and Literal Language are still in force once the page is read.
+ *
+ * Two accessibility decisions are deliberate here:
+ *
+ * 1. Status is never carried by colour alone. Every row states its status in
+ *    words ("Finished", "Now", "Later"), so the list still reads correctly in
+ *    greyscale, in high-contrast mode, and to a screen reader. The emoji are
+ *    `aria-hidden` for the same reason - assistive tech would otherwise read
+ *    out "white heavy check mark" before the actual label.
+ * 2. The pulse on the current row is decoration, so it is disabled under
+ *    `prefers-reduced-motion`. Nothing about the row's meaning depends on it.
+ */
+function VisualSchedule({ onStartTask }: VisualScheduleProps) {
+  /**
+   * Rendered after mount rather than during render: the server and the browser
+   * can be in different timezones, and a date computed on both sides would
+   * disagree and trip a hydration error.
+   */
+  const [today, setToday] = useState<string | null>(null);
+
+  useEffect(() => {
+    setToday(
+      new Date().toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }),
+    );
+  }, []);
+
+  const activeItem = VISUAL_SCHEDULE.find((item) => item.status === "active");
+  const remaining = VISUAL_SCHEDULE.filter((item) => item.status === "pending")
+    .length;
+
+  return (
+    <div className="mx-auto mt-8 w-full max-w-md px-4">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
+          <span aria-hidden="true">📅</span> TODAY
+          <span className="mt-1 block text-base font-semibold text-slate-300 sm:text-lg">
+            {today ?? "…"}
+          </span>
+        </h2>
+
+        <ul className="mt-5 space-y-2.5">
+          {VISUAL_SCHEDULE.map((item) => {
+            const isActive = item.status === "active";
+            const isDone = item.status === "done";
+
+            return (
+              <li key={`${item.time}-${item.label}`}>
+                <div
+                  aria-current={isActive ? "true" : undefined}
+                  className={[
+                    "rounded-xl border p-3.5 transition-all duration-300 motion-reduce:transition-none",
+                    isActive
+                      ? [
+                          "border-blue-500 bg-blue-900/30",
+                          "shadow-[0_0_0_3px_rgba(59,130,246,0.18)]",
+                          "animate-pulse motion-reduce:animate-none",
+                        ].join(" ")
+                      : isDone
+                        ? "border-slate-800 bg-slate-800/40 opacity-50"
+                        : "border-slate-800 bg-slate-900",
+                  ].join(" ")}
+                >
+                  <div className="flex items-center gap-3">
+                    {/* Status marker. The visible emoji is decorative; the word
+                        beside it is what actually carries the status. */}
+                    <span aria-hidden="true" className="text-xl leading-none">
+                      {isDone ? "✅" : isActive ? "🔵" : "⬜"}
+                    </span>
+
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-bold text-slate-100">
+                        {item.time} — {item.label}
+                      </span>
+                      <span className="block text-[11px] font-medium text-slate-400">
+                        {isDone ? "Finished" : isActive ? "Now" : "Later"}
+                        {isDone && " (DONE!)"}
+                      </span>
+                    </span>
+
+                    {isActive && (
+                      <span
+                        aria-hidden="true"
+                        className="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-400 shadow-[0_0_10px_2px_rgba(96,165,250,0.75)]"
+                      />
+                    )}
+                  </div>
+
+                  {isActive && (
+                    <button
+                      id="schedule-start-task"
+                      type="button"
+                      onClick={onStartTask}
+                      className={[
+                        "mt-3.5 flex w-full items-center justify-center gap-2 rounded-xl",
+                        "bg-blue-500 px-4 py-3 text-sm font-bold text-slate-950",
+                        "transition-all duration-300 motion-reduce:transition-none",
+                        "hover:bg-blue-400 active:scale-[0.98]",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300",
+                      ].join(" ")}
+                    >
+                      <span aria-hidden="true">📸</span>
+                      Open Scanner to Start
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        {/* Predictability is the point of this screen: how much is left, and
+            when the day is over. */}
+        <div className="mt-5 border-t border-slate-800 pt-4">
+          <p className="text-sm font-semibold text-slate-300">
+            <span aria-hidden="true">⏳</span> {remaining} activities left
+          </p>
+          <p className="mt-1 text-sm font-semibold text-slate-300">
+            <span aria-hidden="true">🏁</span> School ends at {SCHOOL_END_TIME}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type NoticeBannerProps = {
   notice: Notice;
   onDismiss: () => void;
@@ -849,6 +1029,13 @@ function NoticeBanner({ notice, onDismiss }: NoticeBannerProps) {
 }
 
 export default function Home() {
+  const [appState, setAppState] = useState<AppState>("camera");
+  /**
+   * Set once the student starts a task from the Autism visual schedule. It is
+   * cleared again whenever the profile is re-chosen, so picking Autism a second
+   * time brings the schedule back rather than leaving it permanently skipped.
+   */
+  const [scheduleDismissed, setScheduleDismissed] = useState(false);
   const [stage, setStage] = useState<Stage>("A");
   const [camState, setCamState] = useState<CamState>("idle");
   const [camMessage, setCamMessage] = useState<string | null>(null);
@@ -1111,6 +1298,10 @@ export default function Home() {
    * map are never discarded, and read-aloud keeps running.
    */
   const selectProfile = useCallback((profile: ReadingProfile) => {
+    // Choosing a profile re-arms the schedule: Autism puts it back, the other
+    // two take it away for good.
+    setScheduleDismissed(false);
+
     if (profile === "dyslexia") {
       setDyslexiaFocus(true);
       setAsdZenFocus(false);
@@ -1137,11 +1328,29 @@ export default function Home() {
     setLiteralLanguage(false);
   }, []);
 
-  const selectedProfile: ReadingProfile = asdZenFocus
+  /**
+   * The active profile, derived rather than stored. It is read straight off the
+   * two flags `selectProfile` writes, so the radio group in the modal, the
+   * reader's Zen surface, and the visual schedule can never disagree about
+   * which profile is on.
+   */
+  const activeProfile: ReadingProfile = asdZenFocus
     ? "autism"
     : dyslexiaFocus
       ? "dyslexia"
       : "none";
+
+  /**
+   * The visual schedule, shown *because* the Autism profile is selected.
+   *
+   * This is not part of `AppState` on purpose. The schedule is a consequence of
+   * the profile, not a destination the student navigates to, so it is derived.
+   * The one piece of state it does need is `scheduleDismissed`: selecting the
+   * profile is not the same as staying on it. Without that flag the schedule
+   * would re-assert itself forever and the Start button could never hand over
+   * to the camera.
+   */
+  const showSchedule = activeProfile === "autism" && !scheduleDismissed;
 
   /**
    * Arrow keys move through a radio group, so the cards behave the way a
@@ -1232,13 +1441,19 @@ export default function Home() {
     }
   }, [stopSpeaking, stopStream]);
 
+  /**
+   * The camera only opens on the camera screen. Behind the visual schedule
+   * there is no preview and no permission prompt to justify, so a student on
+   * the Autism schedule is never asked for camera access until they actually
+   * start a task.
+   */
   useEffect(() => {
-    if (stage !== "A") return;
+    if (showSchedule || appState !== "camera" || stage !== "A") return;
     void startCamera();
     return () => {
       stopStream();
     };
-  }, [stage, startCamera, stopStream]);
+  }, [appState, showSchedule, stage, startCamera, stopStream]);
 
   useEffect(() => {
     return () => {
@@ -1311,6 +1526,7 @@ export default function Home() {
       setSourceLabel(label);
       setPreviewSrc(image);
       setStage("B");
+      setAppState("workspace");
 
       try {
         // The preview above can stay a blob:/path URL, but the API needs bytes.
@@ -1346,7 +1562,7 @@ export default function Home() {
           if (data.fallback) {
             const reason = data.reason ?? "unknown";
             console.error(
-              `[auraread] scanner fell back to sample text (reason=${reason})`,
+              `[bigkas] scanner fell back to sample text (reason=${reason})`,
               data.details ?? data.error,
             );
             pushNotice(
@@ -1359,7 +1575,7 @@ export default function Home() {
           setExtractedText(SAMPLE_TEXT);
           setUsedFallback(true);
           console.warn(
-            "[auraread] scanner response had no text field; using built-in sample.",
+            "[bigkas] scanner response had no text field; using built-in sample.",
             data,
           );
           pushNotice(
@@ -1373,7 +1589,7 @@ export default function Home() {
         setUsedFallback(true);
         const message = err instanceof Error ? err.message : String(err);
         console.error(
-          "[auraread] request to /api/ocr failed; using built-in sample.",
+          "[bigkas] request to /api/ocr failed; using built-in sample.",
           err,
         );
         pushNotice(
@@ -1474,6 +1690,11 @@ export default function Home() {
     setRulerOn(false);
     setRulerTop(null);
     setStage("A");
+    // Retaking goes straight back to the scanner rather than to the schedule:
+    // the student already knows which task they are working on. If the Autism
+    // profile is still on, the schedule reappears in front of the camera, since
+    // that profile owns the landing screen.
+    setAppState("camera");
   }, [closeOverlays, stopSpeaking]);
 
   /* --------------------- translation & mind map ------------------------ */
@@ -1508,7 +1729,7 @@ export default function Home() {
       pushNotice("info", "Translated to Tagalog.");
       return true;
     } catch (err) {
-      console.error("[auraread] translation failed.", err);
+      console.error("[bigkas] translation failed.", err);
       pushNotice(
         "error",
         "The Tagalog translation could not be created.",
@@ -1583,7 +1804,7 @@ export default function Home() {
         keyConcepts: (data.mindmap.keyConcepts ?? []).map((c: unknown) => String(c)),
       });
     } catch (err) {
-      console.error("[auraread] mind map failed.", err);
+      console.error("[bigkas] mind map failed.", err);
       pushNotice(
         "error",
         "The study summary could not be built.",
@@ -1704,9 +1925,20 @@ export default function Home() {
   const usedFallbackHardFailure =
     usedFallback && notice?.tone === "error";
 
+  /**
+   * The reading stage owns the whole viewport, but only while the reader is
+   * actually on screen. The camera and the visual schedule keep an ordinary
+   * scrolling document, so globals.css must not lock the scroll while either is
+   * showing - a locked viewport would cut the schedule off on a short screen.
+   */
+  const isReadingStage =
+    !showSchedule && appState === "workspace" && stage === "B";
+
   return (
     <div
-      data-stage={stage}
+      // Read by globals.css to lock the document scroll and hide the compliance
+      // banner, so it tracks what is on screen rather than just `stage`.
+      data-stage={isReadingStage ? "B" : "A"}
       className={[
         "flex flex-col",
         // The reading stage owns the whole viewport: a fixed-height column with
@@ -1714,20 +1946,23 @@ export default function Home() {
         // a page-level scroll, and the controls are always within thumb reach.
         // globals.css locks the document scroll while this is active, because
         // the compliance banner in layout.tsx sits above this element.
-        stage === "B" ? "h-[100dvh] overflow-hidden" : "min-h-screen",
+        isReadingStage ? "h-[100dvh] overflow-hidden" : "min-h-screen",
       ].join(" ")}
     >
       {/* The brand bar carries the same hamburger as the reading header, so the
           reading profile is one tap away before a page has even been scanned. */}
-      {stage === "A" && (
-        <header className="border-b border-slate-800/80 bg-slate-950/70 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-4">
+      {!isReadingStage && (
+        <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-slate-950/95 backdrop-blur-md">
+          {/* pl-14 on mobile reserves the gutter the fixed profile hamburger
+              occupies (left-3 + h-9 = 48px), so the wordmark never sits under
+              it once this bar sticks to the top. */}
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 py-4 pl-14 pr-4 sm:px-4">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-violet-500 text-slate-950 shadow-lg shadow-sky-500/20">
               <ScanLine className="h-6 w-6" aria-hidden="true" />
             </div>
             <div className="mr-auto">
               <h1 className="text-lg font-semibold tracking-tight text-white sm:text-xl">
-                AuraRead AI
+                BIGKAS
               </h1>
               <p className="text-xs text-slate-400 sm:text-sm">
                 Point your camera at a page &rarr; get clean, readable text.
@@ -1743,16 +1978,30 @@ export default function Home() {
 
       <main
         className={[
-          stage === "B"
+          isReadingStage
             ? "flex min-h-0 w-full flex-1 flex-col overflow-hidden"
             : "mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:py-8",
         ].join(" ")}
       >
-        {stage === "A" && notice && (
+        {!showSchedule && notice && (
           <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
         )}
 
-        {stage === "A" ? (
+        {/* ---------------- Autism profile: TEACCH visual schedule -----------------
+            Checked first, ahead of both working screens. The Autism profile is
+            what puts a student on the schedule, and picking any other profile
+            drops them straight back into the camera or the reader. */}
+        {showSchedule ? (
+          <VisualSchedule
+            onStartTask={() => {
+              // Move to the camera, but leave the profile alone: Zen Sensory
+              // Focus and Literal Language must still be in force when the
+              // page is read.
+              setScheduleDismissed(true);
+              setAppState("camera");
+            }}
+          />
+        ) : appState === "camera" ? (
           <div className="animate-fade-in-up grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
             {/* ------------------------- camera panel ------------------------- */}
             <section
@@ -1979,7 +2228,7 @@ export default function Home() {
 
               <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-4 text-[11px] leading-relaxed text-slate-500">
                 <p className="font-semibold text-slate-400">
-                  AuraRead AI is an assistive document formatting tool.
+                  BIGKAS is an assistive document formatting tool.
                 </p>
                 <p className="mt-1">
                   It only reproduces the words already printed on the page you
@@ -2005,7 +2254,7 @@ export default function Home() {
                   without disturbing the header's own layout. */}
               <span className="flex min-w-0 items-center gap-1.5 pl-12 text-xs font-semibold text-slate-200">
                 <ScanLine className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-                <span className="hidden sm:inline">AuraRead</span>
+                <span className="hidden sm:inline">BIGKAS</span>
               </span>
               {/* CENTER: primary action, always visible */}
               <button
@@ -2711,7 +2960,7 @@ export default function Home() {
                 </p>
 
                 <p className="mt-3 border-t border-slate-200/70 pt-3 text-[11px] leading-relaxed text-slate-500">
-                  AuraRead AI is an assistive document formatting tool. Text is
+                  BIGKAS is an assistive document formatting tool. Text is
                   reproduced verbatim from your photo — no diagnosis,
                   interpretation or health guidance is provided.
                 </p>
@@ -2777,8 +3026,15 @@ export default function Home() {
                 title="Dyslexia"
                 summary="Roomier type and a line-tracking guide so the eye stays on the line it is reading."
                 features={["Lexend typeface", "Wide spacing", "Reading ruler"]}
-                selected={selectedProfile === "dyslexia"}
-                onSelect={() => selectProfile("dyslexia")}
+                selected={activeProfile === "dyslexia"}
+                onSelect={() => {
+                  selectProfile("dyslexia");
+                  // Close on click so the student sees the result of their
+                  // choice. Keyboard arrow navigation deliberately does NOT
+                  // close it - browsing the options must not dismiss the
+                  // dialog mid-navigation.
+                  closeOverlays();
+                }}
                 tone="sky"
               />
               <ProfileCard
@@ -2788,8 +3044,14 @@ export default function Home() {
                 title="Autism"
                 summary="A calm, low-stimulation page with figures of speech restated in plain words."
                 features={["Zen sensory focus", "Earth tones", "Literal language"]}
-                selected={selectedProfile === "autism"}
-                onSelect={() => selectProfile("autism")}
+                selected={activeProfile === "autism"}
+                onSelect={() => {
+                  selectProfile("autism");
+                  // Without this the schedule would render behind this modal's
+                  // backdrop, so choosing Autism would look like nothing
+                  // happened.
+                  closeOverlays();
+                }}
                 tone="emerald"
               />
 
@@ -2799,15 +3061,18 @@ export default function Home() {
                 id="profile-option-none"
                 type="button"
                 role="radio"
-                aria-checked={selectedProfile === "none"}
-                tabIndex={selectedProfile === "none" ? 0 : -1}
+                aria-checked={activeProfile === "none"}
+                tabIndex={activeProfile === "none" ? 0 : -1}
                 data-profile-index={2}
-                onClick={() => selectProfile("none")}
+                onClick={() => {
+                  selectProfile("none");
+                  closeOverlays();
+                }}
                 className={[
                   "flex w-full items-center gap-2.5 rounded-2xl border px-3.5 py-2.5 text-left",
                   "transition-all duration-300 motion-reduce:transition-none active:scale-[0.99]",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
-                  selectedProfile === "none"
+                  activeProfile === "none"
                     ? "border-slate-400 bg-slate-700/60 ring-2 ring-slate-300/70 ring-offset-2 ring-offset-slate-900"
                     : "border-slate-700 bg-slate-800/40 hover:border-slate-600",
                 ].join(" ")}
@@ -2820,12 +3085,12 @@ export default function Home() {
                   className={[
                     "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
                     "transition-all duration-300 motion-reduce:transition-none",
-                    selectedProfile === "none"
+                    activeProfile === "none"
                       ? "border-slate-300 bg-slate-300 text-slate-900"
                       : "border-slate-600 bg-transparent",
                   ].join(" ")}
                 >
-                  {selectedProfile === "none" && (
+                  {activeProfile === "none" && (
                     <Check className="h-3.5 w-3.5" strokeWidth={3} />
                   )}
                 </span>
@@ -2833,7 +3098,7 @@ export default function Home() {
             </div>
 
             <p className="mt-3 text-[10px] leading-relaxed text-slate-500">
-              Profiles only change how the page is displayed. AuraRead AI is an
+              Profiles only change how the page is displayed. BIGKAS is an
               assistive document formatting tool and does not assess, diagnose
               or advise.
             </p>
@@ -2841,9 +3106,9 @@ export default function Home() {
         </div>
       )}
 
-      {stage === "A" && (
+      {!isReadingStage && (
         <footer className="border-t border-slate-800/80 px-4 py-5 text-center text-[11px] leading-relaxed text-slate-500">
-          AuraRead AI — assistive document formatting tool. Not a medical device.
+          BIGKAS — assistive document formatting tool. Not a medical device.
           Images are processed in memory for this demo and are not stored.
         </footer>
       )}

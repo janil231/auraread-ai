@@ -10,9 +10,9 @@ const lexend = Lexend({
 });
 
 export const metadata: Metadata = {
-  title: "AuraRead AI — Vision to Accessible Text",
+  title: "BIGKAS — Bridging Inclusive Gaps in Knowledge Access and Speech",
   description:
-    "AuraRead AI is an assistive document formatting tool that turns a photo of printed text into clean, dyslexia-friendly, readable and speakable text.",
+    "BIGKAS is an assistive document formatting tool that turns a photo of printed text into clean, dyslexia-friendly, readable and speakable text.",
 };
 
 export const viewport: Viewport = {
@@ -28,14 +28,14 @@ export default function RootLayout({
   return (
     <html lang="en" className={lexend.variable}>
       <body className="font-lexend antialiased">
-        {/* Compliance banner — AuraRead is a document formatting utility, not a
+        {/* Compliance banner — BIGKAS is a document formatting utility, not a
             medical, clinical or diagnostic product. */}
         <div
           data-compliance-banner
           className="border-b border-slate-800/80 bg-slate-900/60 px-4 py-2 text-center text-[11px] leading-snug text-slate-400 sm:text-xs"
         >
           <span className="font-semibold text-slate-300">
-            AuraRead AI is an assistive document formatting tool.
+            BIGKAS is an assistive document formatting tool.
           </span>{" "}
           It re-types the text you photograph so it is easier to read. It does
           not diagnose, interpret or advise on any medical condition.
